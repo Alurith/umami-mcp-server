@@ -1,0 +1,39 @@
+[project]
+name = "umami-mcp-server"
+version = "0.1.0"
+description = "MCP server exposing Umami analytics (Cloud + self-hosted)"
+readme = "README.md"
+authors = [
+    { name = "Alessandro Ferrini", email = "im@alessandroferrini.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp>=1.26.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.408",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.14.14",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "double"
+
+[project.scripts]
+umami-mcp-server = "umami_mcp_server:main"
+
+[build-system]
+requires = ["uv_build>=0.9.25,<0.10.0"]
+build-backend = "uv_build"
