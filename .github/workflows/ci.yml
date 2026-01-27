@@ -1,0 +1,22 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Install project + dev deps (pytest/ruff/pyright live in dependency-groups.dev)
+      - run: uv sync --dev
+      - run: uv run ruff format . --check
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - run: uv run pytest
