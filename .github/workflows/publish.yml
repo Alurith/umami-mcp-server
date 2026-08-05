@@ -3,9 +3,11 @@ on:
   push:
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
+
 permissions:
   id-token: write
   contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -13,5 +15,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
-      - run: uv build --no-sources
-      - run: uv publish
+        with:
+          python-version: "3.11"
+      - name: Verify tag matches project version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+
+          with open("pyproject.toml", "rb") as file:
+              project_version = tomllib.load(file)["project"]["version"]
+          assert os.environ["RELEASE_TAG"] == project_version, (
+              f"tag {os.environ['RELEASE_TAG']} does not match {project_version}"
+          )
+          PY
+      - name: Build fresh artifacts
+        run: |
+          rm -rf dist
+          uv build --no-sources
+      - name: Verify wheel install and metadata
+        run: |
+          uv venv --python 3.11 .publish-venv
+          uv pip install --python .publish-venv/bin/python dist/*.whl
+          .publish-venv/bin/python - <<'PY'
+          from importlib.metadata import requires, version
+          import umami_mcp_server
+
+          assert version("umami-mcp-server") == "0.2.0"
+          dependencies = requires("umami-mcp-server") or []
+          assert any(item.lower().startswith("tzdata") for item in dependencies)
+          assert callable(umami_mcp_server.main)
+          PY
+          UMAMI_API_KEY=wheel-smoke timeout 5s .publish-venv/bin/umami-mcp-server </dev/null
+      - run: uv publish dist/*

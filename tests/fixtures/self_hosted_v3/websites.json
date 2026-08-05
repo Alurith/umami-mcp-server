@@ -1,0 +1,26 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "name": "Synthetic Fixture Site",
+      "domain": "example.test",
+      "resetAt": null,
+      "userId": "00000000-0000-4000-8000-000000000002",
+      "teamId": null,
+      "createdBy": "00000000-0000-4000-8000-000000000002",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z",
+      "deletedAt": null,
+      "replayEnabled": false,
+      "replayConfig": null,
+      "user": {
+        "username": "synthetic-user",
+        "id": "00000000-0000-4000-8000-000000000002"
+      },
+      "shareId": null
+    }
+  ],
+  "count": 1,
+  "page": 1,
+  "pageSize": 20
+}

@@ -1,0 +1,11 @@
+{
+  "pageviews": [{"x": "2026-01-08T00:00:00Z", "y": 20}],
+  "sessions": [{"x": "2026-01-08T00:00:00Z", "y": 11}],
+  "startDate": "2026-01-08T00:00:00Z",
+  "endDate": "2026-01-09T00:00:00Z",
+  "compare": {
+    "pageviews": [{"x": "2026-01-01T00:00:00Z", "y": 12}],
+    "sessions": [{"x": "2026-01-01T00:00:00Z", "y": 7}]
+  },
+  "contractRevision": "current"
+}

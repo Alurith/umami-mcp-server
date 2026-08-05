@@ -12,29 +12,30 @@ class Settings(BaseSettings):
         env_prefix="",
         extra="ignore",
         populate_by_name=True,
+        hide_input_in_errors=True,
     )
 
     umami_api_key: str | None = Field(
         default=None,
         validation_alias="UMAMI_API_KEY",
-        description=(
-            "Umami Cloud API key. Required for Umami Cloud deployments (https://api.umami.is)."
-        ),
+        description=("API key for Umami Cloud or a self-hosted Umami v3.x deployment."),
     )
     umami_username: str | None = Field(
         default=None,
         validation_alias="UMAMI_USERNAME",
-        description="Umami username (self-hosted only).",
+        description="Umami username (self-hosted v3.x only).",
     )
     umami_password: str | None = Field(
         default=None,
         validation_alias="UMAMI_PASSWORD",
-        description="Umami password (self-hosted only).",
+        description="Umami password (self-hosted v3.x only).",
     )
     umami_api_base: str = Field(
         default="https://api.umami.is/v1",
         validation_alias="UMAMI_API_BASE",
-        description="Base URL for Umami API (Umami Cloud: https://api.umami.is/v1)",
+        description=(
+            "API root (Cloud: https://api.umami.is/v1; self-hosted v3.x: https://host.example/api)."
+        ),
     )
 
     @model_validator(mode="after")
@@ -44,6 +45,11 @@ class Settings(BaseSettings):
         has_password = bool(self.umami_password)
 
         if has_api_key:
+            if has_username or has_password:
+                raise ValueError(
+                    "Invalid Umami auth configuration. Provide either UMAMI_API_KEY or "
+                    "UMAMI_USERNAME and UMAMI_PASSWORD, not both."
+                )
             return self
 
         if has_username != has_password:
@@ -64,9 +70,9 @@ class Settings(BaseSettings):
         looks_like_cloud = host == "api.umami.is"
         if looks_like_cloud:
             raise ValueError(
-                "UMAMI_USERNAME/UMAMI_PASSWORD are only supported for self-hosted Umami. "
-                "Umami Cloud requires UMAMI_API_KEY. For self-hosted, set UMAMI_API_BASE to "
-                "your instance API root (e.g. https://your-umami.example/api)."
+                "UMAMI_USERNAME/UMAMI_PASSWORD are only supported for self-hosted Umami v3.x. "
+                "Umami Cloud requires UMAMI_API_KEY. For self-hosted v3.x, set UMAMI_API_BASE "
+                "to your instance API root (e.g. https://your-umami.example/api)."
             )
 
         return self

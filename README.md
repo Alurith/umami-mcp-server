@@ -1,72 +1,63 @@
 # Umami MCP Server
 
-MCP server that exposes Umami Cloud analytics via tools.
+MCP server exposing read-only analytics from the current **Umami Cloud API** and
+**self-hosted Umami 3.x**.
 
-## Tools
+## Support matrix
 
-- `get_websites` - List all your websites
-- `get_stats` - Get visitor statistics
-- `get_pageviews` - View page traffic over time
-- `get_metrics` - See browsers, countries, devices, and more
-- `get_active` - Current active visitors
+| Deployment | Support | API root | Authentication |
+|---|---|---|---|
+| Umami Cloud (current) | Supported | `https://api.umami.is/v1` | API key |
+| Self-hosted Umami 3.x | Supported | `https://host.example/api` | API key or username/password |
+| Self-hosted Umami 2.x | Not supported; any future integration will be separate | — | — |
+| Umami 1.x | Not supported | — | — |
 
-## Requirements
+The `/v1` suffix belongs to the current **Cloud API URL**. It does not mean that this
+server supports version 1 of the self-hosted Umami application.
 
-- Python 3.13+
-- `uv`
+## Requirements and run command
 
-## Configure
+- Python 3.11+
+- [`uv`](https://docs.astral.sh/uv/)
 
-Umami Cloud API base URL: `https://api.umami.is/v1`
+Run the published package directly:
+
+```bash
+uvx umami-mcp-server
+```
+
+## Configuration
 
 Environment variables:
 
-- `UMAMI_API_KEY` - Umami Cloud API key (required for Umami Cloud)
-- `UMAMI_USERNAME` - Umami username (self-hosted only)
-- `UMAMI_PASSWORD` - Umami password (self-hosted only)
-- `UMAMI_API_BASE` (optional) - defaults to `https://api.umami.is/v1`
+- `UMAMI_API_KEY`: Cloud or self-hosted API key.
+- `UMAMI_USERNAME`: self-hosted Umami 3.x username.
+- `UMAMI_PASSWORD`: self-hosted Umami 3.x password.
+- `UMAMI_API_BASE`: optional; defaults to `https://api.umami.is/v1`. For self-hosted
+  deployments, set the API root including `/api`.
 
-Auth rules:
+Choose exactly one authentication mode: API key **or** username and password. Cloud accepts
+only an API key.
 
-- Umami Cloud: only `UMAMI_API_KEY` is supported.
-- Self-hosted: you can use `UMAMI_API_KEY` or `UMAMI_USERNAME` + `UMAMI_PASSWORD`.
-- You must configure at least one of these: `UMAMI_API_KEY` OR (`UMAMI_USERNAME` and `UMAMI_PASSWORD`).
-- For self-hosted username/password auth, set `UMAMI_API_BASE` to your instance API root (e.g. `https://your-umami.example/api`).
-
-All tool parameters that represent times accept ISO datetimes. If a datetime is missing a timezone, it is treated as UTC.
-
-## Run locally
-
-```bash
-uvx run umami-mcp-server
-```
-
-## OpenCode MCP config
-
-Example `~/.config/opencode/opencode.json` (replace the API key and adjust the path if your clone lives elsewhere):
+Example MCP configuration for Cloud:
 
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
-  "theme": "system",
   "mcp": {
     "umami": {
       "type": "local",
-      "command": [
-        "uvx",
-        "umami-mcp-server"
-      ],
+      "command": ["uvx", "umami-mcp-server"],
       "environment": {
         "UMAMI_API_KEY": "YOUR_UMAMI_CLOUD_API_KEY",
         "UMAMI_API_BASE": "https://api.umami.is/v1"
       },
-      "enabled": true,
+      "enabled": true
     }
   }
 }
 ```
 
-Self-hosted example:
+Self-hosted Umami 3.x:
 
 ```json
 {
@@ -77,11 +68,87 @@ Self-hosted example:
       "environment": {
         "UMAMI_USERNAME": "YOUR_USERNAME",
         "UMAMI_PASSWORD": "YOUR_PASSWORD",
-        "UMAMI_API_BASE": "https://your-umami.example"
-      }
-    },
-    "enabled": true,
-
+        "UMAMI_API_BASE": "https://your-umami.example/api"
+      },
+      "enabled": true
+    }
   }
 }
 ```
+
+## Tools
+
+- `get_websites`: return one page of websites. `page >= 1` and `1 <= page_size <= 100`.
+- `get_stats`: summary pageviews, visitors, visits, bounces, total time, and comparison.
+- `get_pageviews`: pageview and session time series.
+- `get_metrics`: compact or expanded metrics. `1 <= limit <= 500` and
+  `0 <= offset <= 10000`.
+- `get_active`: current active visitors.
+
+Every `website_id`, segment, and cohort identifier is validated as a UUID before an HTTP
+request is sent.
+
+### Time ranges
+
+Datetime parameters accept ISO datetimes. Naive values are interpreted as UTC. The four
+range rules are:
+
+| Inputs | Range |
+|---|---|
+| neither | now minus seven days → now |
+| only `end_at` | seven days before `end_at` → `end_at` |
+| only `start_at` | `start_at` → now |
+| both | explicit range |
+
+The end must be later than the start. Pageview units are `minute`, `hour`, `day`, `month`,
+and `year`. Timezones must be valid IANA names such as `UTC` or `Europe/Rome`. Comparisons
+are `prev` or `yoy`.
+
+### Metrics and filters
+
+Metric types:
+
+```text
+path, fullPath, entry, exit, referrer, domain, title, query,
+event, tag, hostname, utmSource, utmMedium, utmCampaign,
+utmContent, utmTerm, browser, os, device, screen, language,
+country, city, region, distinctId, channel
+```
+
+Documented Umami 3 filters:
+
+```text
+path, referrer, title, query, browser, os, device, country,
+region, city, language, hostname, tag, event, distinctId,
+utmSource, utmMedium, utmCampaign, utmContent, utmTerm,
+segment, cohort
+```
+
+Tool input uses snake_case for `distinct_id` and the UTM filters; the server serializes the
+upstream camelCase names automatically.
+
+## Reliability and safe errors
+
+One HTTP client and connection pool is shared for the MCP server lifespan. Login-mode tokens
+are shared, concurrent login/refresh is synchronized, and a request can perform at most three
+analytics sends and one token refresh. GET requests retry only network failures, timeouts,
+rate limits, and transient `500`, `502`, `503`, and `504` responses. `Retry-After` is honored
+up to 60 seconds.
+
+Errors are exposed as controlled categories: authentication, rate limit, timeout, network,
+upstream failure, and invalid response. Public messages and logs exclude response bodies,
+credentials, headers, complete query URLs, and raw HTTP/Pydantic exception values.
+
+## Development
+
+```bash
+uv sync --dev
+uv run ruff format . --check
+uv run ruff check .
+uv run pyright
+uv run pytest
+```
+
+The optional live Cloud contract test requires `UMAMI_LIVE_CLOUD_API_KEY` and
+`UMAMI_LIVE_CLOUD_WEBSITE_ID`; `UMAMI_LIVE_CLOUD_API_BASE` may override the default Cloud
+root.
