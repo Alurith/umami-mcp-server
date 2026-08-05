@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     umami_api_key: str | None = Field(
         default=None,
         validation_alias="UMAMI_API_KEY",
-        description=("API key for Umami Cloud or a self-hosted Umami v3.x deployment."),
+        description="API key for Umami Cloud.",
     )
     umami_username: str | None = Field(
         default=None,
@@ -49,6 +49,12 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Invalid Umami auth configuration. Provide either UMAMI_API_KEY or "
                     "UMAMI_USERNAME and UMAMI_PASSWORD, not both."
+                )
+            parsed = urlparse(self.umami_api_base)
+            if (parsed.hostname or "").lower() != "api.umami.is":
+                raise ValueError(
+                    "UMAMI_API_KEY is only supported for Umami Cloud. Standard self-hosted "
+                    "Umami 3.x requires UMAMI_USERNAME and UMAMI_PASSWORD."
                 )
             return self
 

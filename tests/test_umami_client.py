@@ -55,6 +55,30 @@ async def _recording_sleep(delays: list[float], delay: float) -> object:
 
 
 @pytest.mark.asyncio
+async def test_cloud_api_key_uses_documented_bearer_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_authorization: str | None = None
+    seen_legacy_header: str | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_authorization, seen_legacy_header
+        seen_authorization = request.headers.get("Authorization")
+        seen_legacy_header = request.headers.get("x-umami-api-key")
+        return httpx.Response(200, json=WEBSITES)
+
+    _patch_async_client(monkeypatch, handler)
+    client = UmamiClient(_settings())
+    try:
+        await client.get_websites()
+    finally:
+        await client.aclose()
+
+    assert seen_authorization == "Bearer synthetic-api-key"
+    assert seen_legacy_header is None
+
+
+@pytest.mark.asyncio
 async def test_login_flow_adds_bearer_token_and_returns_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

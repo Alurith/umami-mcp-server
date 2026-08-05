@@ -27,6 +27,14 @@ def test_settings_self_hosted_username_password_ok() -> None:
     assert settings.umami_password == "p"
 
 
+def test_settings_self_hosted_rejects_api_key() -> None:
+    with pytest.raises(ValueError, match=r"only supported for Umami Cloud"):
+        Settings(
+            umami_api_key="secret-api-key",
+            umami_api_base="https://example.com/api",
+        )
+
+
 def test_settings_missing_credentials_raises() -> None:
     with pytest.raises(ValueError, match=r"Missing Umami credentials"):
         Settings(umami_api_base="https://example.com/api")

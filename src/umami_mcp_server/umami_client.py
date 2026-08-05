@@ -108,7 +108,7 @@ class UmamiClient:
             api_key = settings.umami_api_key
             if not api_key:
                 raise UmamiAuthenticationError("An Umami API key is required.")
-            headers["x-umami-api-key"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
 
         self._client = httpx.AsyncClient(
             base_url=base_url,

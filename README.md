@@ -8,7 +8,7 @@ MCP server exposing read-only analytics from the current **Umami Cloud API** and
 | Deployment | Support | API root | Authentication |
 |---|---|---|---|
 | Umami Cloud (current) | Supported | `https://api.umami.is/v1` | API key |
-| Self-hosted Umami 3.x | Supported | `https://host.example/api` | API key or username/password |
+| Self-hosted Umami 3.x | Supported | `https://host.example/api` | Username/password |
 | Self-hosted Umami 2.x | Not supported; any future integration will be separate | — | — |
 | Umami 1.x | Not supported | — | — |
 
@@ -30,14 +30,15 @@ uvx umami-mcp-server
 
 Environment variables:
 
-- `UMAMI_API_KEY`: Cloud or self-hosted API key.
+- `UMAMI_API_KEY`: Umami Cloud API key.
 - `UMAMI_USERNAME`: self-hosted Umami 3.x username.
 - `UMAMI_PASSWORD`: self-hosted Umami 3.x password.
 - `UMAMI_API_BASE`: optional; defaults to `https://api.umami.is/v1`. For self-hosted
   deployments, set the API root including `/api`.
 
-Choose exactly one authentication mode: API key **or** username and password. Cloud accepts
-only an API key.
+Choose exactly one authentication mode: a Cloud API key **or** self-hosted username and
+password. Cloud API keys use the documented `Authorization: Bearer` scheme; standard
+self-hosted Umami 3.x does not support API keys.
 
 Example MCP configuration for Cloud:
 

@@ -632,7 +632,7 @@ uv run pytest
 Mantenere:
 
 - Cloud autenticato soltanto con API key;
-- self-hosted autenticato con API key oppure username/password;
+- self-hosted autenticato con username/password;
 - default Cloud `https://api.umami.is/v1`.
 
 Aggiornare descrizioni ed errori per dichiarare self-hosted v3.x e mostrare la root corretta
