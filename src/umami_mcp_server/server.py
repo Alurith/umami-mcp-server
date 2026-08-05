@@ -3,15 +3,25 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from .models import Filters, ms_timerange
 from .settings import get_settings
 from .umami_client import UmamiClient
 
-server = FastMCP("Umami MCP")
+try:
+    SERVER_VERSION = version("umami-mcp-server")
+except PackageNotFoundError:
+    SERVER_VERSION = "0.0.0"
+
+server = MCPServer(
+    "umami-mcp-server",
+    title="Umami MCP",
+    version=SERVER_VERSION,
+)
 
 
 @asynccontextmanager
