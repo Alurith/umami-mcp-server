@@ -11,11 +11,13 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --dev
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked --dev
       - run: uv run ruff format . --check
       - run: uv run ruff check .
       - run: uv run pyright
@@ -24,8 +26,8 @@ jobs:
   wheel-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           python-version: "3.11"
       - run: uv build --no-sources
