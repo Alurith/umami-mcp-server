@@ -130,20 +130,54 @@ async def test_server_negotiates_current_protocol(fake_lifespan: type[FakeUmamiC
 
 
 @pytest.mark.asyncio
+async def test_server_capabilities_match_the_standard_mcpserver_surface(
+    fake_lifespan: type[FakeUmamiClient],
+) -> None:
+    async with Client(server, raise_exceptions=True) as client:
+        capabilities = client.server_capabilities.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+
+    assert capabilities == {
+        "prompts": {"listChanged": True},
+        "resources": {"subscribe": True, "listChanged": True},
+        "tools": {"listChanged": True},
+    }
+    assert "logging" not in capabilities
+    assert "tasks" not in capabilities
+    assert "experimental" not in capabilities
+
+
+@pytest.mark.asyncio
 async def test_server_lists_tools_in_deterministic_order(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
     async with Client(server, raise_exceptions=True) as client:
-        result = await client.list_tools(cache_mode="bypass")
+        first = await client.list_tools(cache_mode="bypass")
+        second = await client.list_tools(cache_mode="bypass")
 
-    assert [tool.name for tool in result.tools] == [
+    assert [tool.name for tool in first.tools] == [
         "get_websites",
         "get_stats",
         "get_pageviews",
         "get_metrics",
         "get_active",
     ]
-    assert result.result_type == "complete"
+    assert first.result_type == "complete"
+    assert first.model_dump(mode="json", by_alias=True) == second.model_dump(
+        mode="json", by_alias=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_tools_catalog_has_a_public_five_minute_cache_hint(
+    fake_lifespan: type[FakeUmamiClient],
+) -> None:
+    async with Client(server, raise_exceptions=True) as client:
+        result = await client.list_tools(cache_mode="bypass")
+
+    assert result.ttl_ms == 300_000
+    assert result.cache_scope == "public"
 
 
 @pytest.mark.asyncio
@@ -285,3 +319,5 @@ async def test_server_keeps_legacy_client_compatibility(
         "get_metrics",
         "get_active",
     ]
+    assert "ttl_ms" not in result.model_fields_set
+    assert "cache_scope" not in result.model_fields_set

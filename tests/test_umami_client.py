@@ -59,12 +59,14 @@ async def test_login_flow_adds_bearer_token_and_returns_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen_auth: str | None = None
+    seen_traceparent: str | None = None
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal seen_auth
+        nonlocal seen_auth, seen_traceparent
         if request.url.path.endswith("/auth/login"):
             return httpx.Response(200, json={"token": "token-1"})
         seen_auth = request.headers.get("Authorization")
+        seen_traceparent = request.headers.get("traceparent")
         return httpx.Response(200, json=WEBSITES)
 
     _patch_async_client(monkeypatch, handler)
@@ -76,6 +78,7 @@ async def test_login_flow_adds_bearer_token_and_returns_model(
 
     assert isinstance(result, WebsitePage)
     assert seen_auth == "Bearer token-1"
+    assert seen_traceparent is not None
 
 
 @pytest.mark.asyncio

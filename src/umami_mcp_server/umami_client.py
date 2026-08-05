@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from time import perf_counter
 from typing import Any, Literal, TypeVar
 from uuid import UUID
 
@@ -21,6 +21,7 @@ from .models import (
     WebsitePage,
     WebsiteStats,
 )
+from . import telemetry
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -74,14 +75,6 @@ _METRICS_ADAPTER = TypeAdapter(list[Metric | ExpandedMetric])
 _ACTIVE_VISITORS_ADAPTER = TypeAdapter(ActiveVisitors)
 
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
-_UUID_PATH_RE = re.compile(
-    r"/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=/|$)",
-    re.IGNORECASE,
-)
-
-
-def _logical_endpoint(endpoint: str) -> str:
-    return _UUID_PATH_RE.sub("/{websiteId}", endpoint)
 
 
 def _utc_now() -> datetime:
@@ -127,60 +120,74 @@ class UmamiClient:
         await self._client.aclose()
 
     async def _login(self) -> str:
-        if not self._username or not self._password:
-            raise UmamiAuthenticationError("Umami login credentials are required.")
-
         endpoint = "/auth/login"
-        try:
-            response = await self._client.post(
-                endpoint,
-                json={"username": self._username, "password": self._password},
-            )
-        except httpx.TimeoutException:
-            logger.warning(
-                "Umami request failed endpoint=%s status=%s attempt=%d error=%s",
-                endpoint,
-                None,
-                1,
-                UmamiTimeoutError.__name__,
-            )
-            raise UmamiTimeoutError("The Umami login request timed out.") from None
-        except httpx.TransportError:
-            logger.warning(
-                "Umami request failed endpoint=%s status=%s attempt=%d error=%s",
-                endpoint,
-                None,
-                1,
-                UmamiNetworkError.__name__,
-            )
-            raise UmamiNetworkError("The Umami login request could not be completed.") from None
+        outcome: telemetry.Outcome = "error"
 
-        try:
-            if response.status_code in {401, 403}:
-                self._log_failure(endpoint, response.status_code, 1, UmamiAuthenticationError)
-                raise UmamiAuthenticationError("Authentication with Umami failed.")
-            if response.status_code == 429:
-                self._log_failure(endpoint, response.status_code, 1, UmamiRateLimitError)
-                raise UmamiRateLimitError("Umami rate-limited the login request.")
-            if not 200 <= response.status_code < 300:
-                self._log_failure(endpoint, response.status_code, 1, UmamiUpstreamError)
-                raise UmamiUpstreamError("Umami rejected the login request.")
-
+        with telemetry.login_span(self._auth_mode) as span:
             try:
-                payload = response.json()
-            except ValueError:
-                self._log_failure(endpoint, response.status_code, 1, UmamiInvalidResponseError)
-                raise UmamiInvalidResponseError(
-                    "Umami returned an invalid login response."
-                ) from None
+                if not self._username or not self._password:
+                    raise UmamiAuthenticationError("Umami login credentials are required.")
 
-            token = payload.get("token") if isinstance(payload, dict) else None
-            if not isinstance(token, str) or not token:
-                self._log_failure(endpoint, response.status_code, 1, UmamiInvalidResponseError)
-                raise UmamiInvalidResponseError("Umami returned an invalid login response.")
-            return token
-        finally:
-            await response.aclose()
+                headers: dict[str, str] = {}
+                telemetry.inject_trace_context(headers)
+                try:
+                    response = await self._client.post(
+                        endpoint,
+                        json={"username": self._username, "password": self._password},
+                        headers=headers,
+                    )
+                except httpx.TimeoutException:
+                    self._log_failure(endpoint, None, 1, UmamiTimeoutError)
+                    raise UmamiTimeoutError("The Umami login request timed out.") from None
+                except httpx.TransportError:
+                    self._log_failure(endpoint, None, 1, UmamiNetworkError)
+                    raise UmamiNetworkError(
+                        "The Umami login request could not be completed."
+                    ) from None
+
+                try:
+                    telemetry.set_response_status(span, response.status_code)
+                    if response.status_code in {401, 403}:
+                        self._log_failure(
+                            endpoint, response.status_code, 1, UmamiAuthenticationError
+                        )
+                        raise UmamiAuthenticationError("Authentication with Umami failed.")
+                    if response.status_code == 429:
+                        telemetry.record_rate_limit(method="POST", endpoint=endpoint)
+                        self._log_failure(endpoint, response.status_code, 1, UmamiRateLimitError)
+                        raise UmamiRateLimitError("Umami rate-limited the login request.")
+                    if not 200 <= response.status_code < 300:
+                        self._log_failure(endpoint, response.status_code, 1, UmamiUpstreamError)
+                        raise UmamiUpstreamError("Umami rejected the login request.")
+
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        self._log_failure(
+                            endpoint, response.status_code, 1, UmamiInvalidResponseError
+                        )
+                        raise UmamiInvalidResponseError(
+                            "Umami returned an invalid login response."
+                        ) from None
+
+                    token = payload.get("token") if isinstance(payload, dict) else None
+                    if not isinstance(token, str) or not token:
+                        self._log_failure(
+                            endpoint, response.status_code, 1, UmamiInvalidResponseError
+                        )
+                        raise UmamiInvalidResponseError("Umami returned an invalid login response.")
+                    outcome = "success"
+                    return token
+                finally:
+                    await response.aclose()
+            except asyncio.CancelledError as error:
+                telemetry.set_error(span, error)
+                raise
+            except Exception as error:
+                telemetry.set_error(span, error)
+                raise
+            finally:
+                telemetry.set_outcome(span, outcome)
 
     async def _ensure_token(self) -> str | None:
         if self._auth_mode != "login":
@@ -193,12 +200,19 @@ class UmamiClient:
                 self._token = await self._login()
             return self._token
 
-    async def _refresh_token(self, failed_token: str | None) -> str:
+    async def _refresh_token(
+        self,
+        failed_token: str | None,
+        *,
+        method: str,
+        endpoint: str,
+    ) -> str:
         async with self._token_lock:
             if self._token is not None and self._token != failed_token:
                 return self._token
             if self._token == failed_token:
                 self._token = None
+            telemetry.record_token_refresh(method=method, endpoint=endpoint)
             self._token = await self._login()
             return self._token
 
@@ -211,7 +225,7 @@ class UmamiClient:
     ) -> None:
         logger.warning(
             "Umami request failed endpoint=%s status=%s attempt=%d error=%s",
-            _logical_endpoint(endpoint),
+            telemetry.normalize_endpoint(endpoint),
             status_code,
             attempt,
             error_class.__name__,
@@ -234,7 +248,7 @@ class UmamiClient:
         ]
         logger.warning(
             "Umami request failed endpoint=%s status=%s attempt=%d error=%s validation=%s",
-            _logical_endpoint(endpoint),
+            telemetry.normalize_endpoint(endpoint),
             status_code,
             attempt,
             UmamiInvalidResponseError.__name__,
@@ -275,91 +289,164 @@ class UmamiClient:
     ) -> T:
         retryable_method = method.upper() == "GET"
         refreshed = False
+        retry_count = 0
+        outcome: telemetry.Outcome = "error"
+        started_at = perf_counter()
 
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            token_used = await self._ensure_token()
-            headers = (
-                {"Authorization": f"Bearer {token_used}"}
-                if self._auth_mode == "login" and token_used is not None
-                else None
-            )
-
+        with telemetry.request_span(method, path, self._auth_mode) as span:
             try:
-                response = await self._client.request(
-                    method,
-                    path,
-                    params=params,
-                    headers=headers,
-                )
-            except httpx.TimeoutException:
-                self._log_failure(path, None, attempt, UmamiTimeoutError)
-                if retryable_method and attempt < MAX_ATTEMPTS:
-                    await self._sleep(self._backoff_delay(attempt - 1))
-                    continue
-                raise UmamiTimeoutError(
-                    "The Umami request timed out after three attempts."
-                ) from None
-            except httpx.TransportError:
-                self._log_failure(path, None, attempt, UmamiNetworkError)
-                if retryable_method and attempt < MAX_ATTEMPTS:
-                    await self._sleep(self._backoff_delay(attempt - 1))
-                    continue
-                raise UmamiNetworkError(
-                    "The Umami request could not be completed after three attempts."
-                ) from None
+                for attempt in range(1, MAX_ATTEMPTS + 1):
+                    token_used = await self._ensure_token()
+                    headers: dict[str, str] = {}
+                    if self._auth_mode == "login" and token_used is not None:
+                        headers["Authorization"] = f"Bearer {token_used}"
+                    telemetry.inject_trace_context(headers)
 
-            try:
-                status_code = response.status_code
-                if status_code == 401:
-                    self._log_failure(path, status_code, attempt, UmamiAuthenticationError)
-                    if self._auth_mode == "api_key" or refreshed or attempt == MAX_ATTEMPTS:
-                        raise UmamiAuthenticationError("Authentication with Umami failed.")
-                    await self._refresh_token(token_used)
-                    refreshed = True
-                    continue
-
-                if status_code == 403:
-                    self._log_failure(path, status_code, attempt, UmamiAuthenticationError)
-                    raise UmamiAuthenticationError("The Umami request is not authorized.")
-
-                if status_code in _RETRYABLE_STATUS_CODES:
-                    error_class = UmamiRateLimitError if status_code == 429 else UmamiUpstreamError
-                    self._log_failure(path, status_code, attempt, error_class)
-                    if retryable_method and attempt < MAX_ATTEMPTS:
-                        delay = (
-                            self._retry_after_delay(
-                                response.headers.get("Retry-After"), attempt - 1
-                            )
-                            if status_code == 429
-                            else self._backoff_delay(attempt - 1)
+                    try:
+                        response = await self._client.request(
+                            method,
+                            path,
+                            params=params,
+                            headers=headers,
                         )
-                        await self._sleep(delay)
-                        continue
-                    if status_code == 429:
-                        raise UmamiRateLimitError("Umami rate-limited the request.")
-                    raise UmamiUpstreamError("Umami is temporarily unavailable.")
+                    except httpx.TimeoutException:
+                        self._log_failure(path, None, attempt, UmamiTimeoutError)
+                        if retryable_method and attempt < MAX_ATTEMPTS:
+                            telemetry.record_retry(
+                                method=method,
+                                endpoint=path,
+                                cause="timeout",
+                            )
+                            retry_count += 1
+                            await self._sleep(self._backoff_delay(attempt - 1))
+                            continue
+                        raise UmamiTimeoutError(
+                            "The Umami request timed out after three attempts."
+                        ) from None
+                    except httpx.TransportError:
+                        self._log_failure(path, None, attempt, UmamiNetworkError)
+                        if retryable_method and attempt < MAX_ATTEMPTS:
+                            telemetry.record_retry(
+                                method=method,
+                                endpoint=path,
+                                cause="network",
+                            )
+                            retry_count += 1
+                            await self._sleep(self._backoff_delay(attempt - 1))
+                            continue
+                        raise UmamiNetworkError(
+                            "The Umami request could not be completed after three attempts."
+                        ) from None
 
-                if not 200 <= status_code < 300:
-                    self._log_failure(path, status_code, attempt, UmamiUpstreamError)
-                    raise UmamiUpstreamError(
-                        f"Umami rejected the request with status {status_code}."
-                    )
+                    try:
+                        status_code = response.status_code
+                        telemetry.set_response_status(span, status_code)
+                        if status_code == 401:
+                            self._log_failure(path, status_code, attempt, UmamiAuthenticationError)
+                            if self._auth_mode == "api_key" or refreshed or attempt == MAX_ATTEMPTS:
+                                raise UmamiAuthenticationError("Authentication with Umami failed.")
+                            await self._refresh_token(
+                                token_used,
+                                method=method,
+                                endpoint=path,
+                            )
+                            refreshed = True
+                            telemetry.record_retry(
+                                method=method,
+                                endpoint=path,
+                                cause="authentication_refresh",
+                            )
+                            retry_count += 1
+                            continue
 
-                try:
-                    payload = response.json()
-                except ValueError:
-                    self._log_failure(path, status_code, attempt, UmamiInvalidResponseError)
-                    raise UmamiInvalidResponseError("Umami returned an invalid response.") from None
+                        if status_code == 403:
+                            self._log_failure(path, status_code, attempt, UmamiAuthenticationError)
+                            raise UmamiAuthenticationError("The Umami request is not authorized.")
 
-                try:
-                    return adapter.validate_python(payload)
-                except ValidationError as error:
-                    self._log_validation_failure(path, status_code, attempt, error)
-                    raise UmamiInvalidResponseError("Umami returned an invalid response.") from None
+                        if status_code in _RETRYABLE_STATUS_CODES:
+                            is_rate_limit = status_code == 429
+                            error_class = (
+                                UmamiRateLimitError if is_rate_limit else UmamiUpstreamError
+                            )
+                            if is_rate_limit:
+                                telemetry.record_rate_limit(method=method, endpoint=path)
+                            self._log_failure(path, status_code, attempt, error_class)
+                            if retryable_method and attempt < MAX_ATTEMPTS:
+                                cause: telemetry.RetryCause = (
+                                    "rate_limit" if is_rate_limit else "server_error"
+                                )
+                                telemetry.record_retry(
+                                    method=method,
+                                    endpoint=path,
+                                    cause=cause,
+                                )
+                                retry_count += 1
+                                delay = (
+                                    self._retry_after_delay(
+                                        response.headers.get("Retry-After"), attempt - 1
+                                    )
+                                    if is_rate_limit
+                                    else self._backoff_delay(attempt - 1)
+                                )
+                                await self._sleep(delay)
+                                continue
+                            if is_rate_limit:
+                                raise UmamiRateLimitError("Umami rate-limited the request.")
+                            raise UmamiUpstreamError("Umami is temporarily unavailable.")
+
+                        if not 200 <= status_code < 300:
+                            self._log_failure(path, status_code, attempt, UmamiUpstreamError)
+                            raise UmamiUpstreamError(
+                                f"Umami rejected the request with status {status_code}."
+                            )
+
+                        try:
+                            payload = response.json()
+                        except ValueError:
+                            self._log_failure(path, status_code, attempt, UmamiInvalidResponseError)
+                            raise UmamiInvalidResponseError(
+                                "Umami returned an invalid response."
+                            ) from None
+
+                        try:
+                            result = adapter.validate_python(payload)
+                        except ValidationError as error:
+                            self._log_validation_failure(path, status_code, attempt, error)
+                            raise UmamiInvalidResponseError(
+                                "Umami returned an invalid response."
+                            ) from None
+
+                        outcome = "success"
+                        return result
+                    finally:
+                        await response.aclose()
+
+                raise AssertionError("unreachable")
+            except asyncio.CancelledError as error:
+                category = telemetry.set_error(span, error)
+                telemetry.record_request_error(
+                    method=method,
+                    endpoint=path,
+                    category=category,
+                )
+                raise
+            except Exception as error:
+                category = telemetry.set_error(span, error)
+                telemetry.record_request_error(
+                    method=method,
+                    endpoint=path,
+                    category=category,
+                )
+                raise
             finally:
-                await response.aclose()
-
-        raise AssertionError("unreachable")
+                telemetry.set_retry_count(span, retry_count)
+                telemetry.set_outcome(span, outcome)
+                telemetry.record_request_duration(
+                    perf_counter() - started_at,
+                    method=method,
+                    endpoint=path,
+                    outcome=outcome,
+                )
 
     async def get_websites(
         self,

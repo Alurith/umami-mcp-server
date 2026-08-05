@@ -139,6 +139,24 @@ Errors are exposed as controlled categories: authentication, rate limit, timeout
 upstream failure, and invalid response. Public messages and logs exclude response bodies,
 credentials, headers, complete query URLs, and raw HTTP/Pydantic exception values.
 
+## Cache and observability
+
+On the current MCP revision, the static `tools/list` catalog has a public five-minute cache
+hint. Tool order and schema content are deterministic, and the catalog contains no Umami
+data, website IDs, or credentials. Legacy protocol serialization remains unchanged and does
+not include cache fields.
+
+MCP SDK already traces incoming MCP operations. Umami MCP Server adds a child span for each
+logical Umami analytics request, a child login span when needed, and metrics for duration,
+errors, retries, rate limits, and token refreshes. Only W3C Trace Context is propagated to
+Umami; MCP baggage is not forwarded.
+
+The base package uses only the OpenTelemetry API, so instrumentation remains no-op without an
+SDK and exporter. Install the optional stack with `umami-mcp-server[otel]`, configure it
+externally, or disable it explicitly with `OTEL_SDK_DISABLED=true`. See
+[the observability guide](docs/observability.md) for setup, exported names, redaction policy,
+and OTLP examples.
+
 ## Development
 
 ```bash

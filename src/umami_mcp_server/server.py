@@ -7,7 +7,7 @@ from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Annotated, Any
 
-from mcp.server import MCPServer
+from mcp.server import CacheHint, MCPServer
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context
 from mcp.shared.exceptions import MCPError
@@ -95,6 +95,12 @@ server = MCPServer[AppContext](
     version=SERVER_VERSION,
     lifespan=_lifespan,
     middleware=[_sanitize_validation_errors],
+    cache_hints={
+        "tools/list": CacheHint(
+            ttl_ms=300_000,
+            scope="public",
+        ),
+    },
 )
 
 
