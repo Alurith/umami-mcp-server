@@ -146,7 +146,7 @@ class UmamiClient:
                     ) from None
 
                 try:
-                    telemetry.set_response_status(span, response.status_code)
+                    span.set_attribute(telemetry.HTTP_RESPONSE_STATUS_CODE, response.status_code)
                     if response.status_code in {401, 403}:
                         self._log_failure(
                             endpoint, response.status_code, 1, UmamiAuthenticationError
@@ -187,7 +187,7 @@ class UmamiClient:
                 telemetry.set_error(span, error)
                 raise
             finally:
-                telemetry.set_outcome(span, outcome)
+                span.set_attribute(telemetry.UMAMI_OUTCOME, outcome)
 
     async def _ensure_token(self) -> str | None:
         if self._auth_mode != "login":
@@ -281,13 +281,12 @@ class UmamiClient:
 
     async def _request(
         self,
-        method: str,
         path: str,
         *,
         adapter: TypeAdapter[T],
         params: dict[str, Any] | None = None,
     ) -> T:
-        retryable_method = method.upper() == "GET"
+        method = "GET"
         refreshed = False
         retry_count = 0
         outcome: telemetry.Outcome = "error"
@@ -311,7 +310,7 @@ class UmamiClient:
                         )
                     except httpx.TimeoutException:
                         self._log_failure(path, None, attempt, UmamiTimeoutError)
-                        if retryable_method and attempt < MAX_ATTEMPTS:
+                        if attempt < MAX_ATTEMPTS:
                             telemetry.record_retry(
                                 method=method,
                                 endpoint=path,
@@ -325,7 +324,7 @@ class UmamiClient:
                         ) from None
                     except httpx.TransportError:
                         self._log_failure(path, None, attempt, UmamiNetworkError)
-                        if retryable_method and attempt < MAX_ATTEMPTS:
+                        if attempt < MAX_ATTEMPTS:
                             telemetry.record_retry(
                                 method=method,
                                 endpoint=path,
@@ -340,7 +339,7 @@ class UmamiClient:
 
                     try:
                         status_code = response.status_code
-                        telemetry.set_response_status(span, status_code)
+                        span.set_attribute(telemetry.HTTP_RESPONSE_STATUS_CODE, status_code)
                         if status_code == 401:
                             self._log_failure(path, status_code, attempt, UmamiAuthenticationError)
                             if self._auth_mode == "api_key" or refreshed or attempt == MAX_ATTEMPTS:
@@ -371,7 +370,7 @@ class UmamiClient:
                             if is_rate_limit:
                                 telemetry.record_rate_limit(method=method, endpoint=path)
                             self._log_failure(path, status_code, attempt, error_class)
-                            if retryable_method and attempt < MAX_ATTEMPTS:
+                            if attempt < MAX_ATTEMPTS:
                                 cause: telemetry.RetryCause = (
                                     "rate_limit" if is_rate_limit else "server_error"
                                 )
@@ -439,8 +438,8 @@ class UmamiClient:
                 )
                 raise
             finally:
-                telemetry.set_retry_count(span, retry_count)
-                telemetry.set_outcome(span, outcome)
+                span.set_attribute(telemetry.UMAMI_RETRY_COUNT, retry_count)
+                span.set_attribute(telemetry.UMAMI_OUTCOME, outcome)
                 telemetry.record_request_duration(
                     perf_counter() - started_at,
                     method=method,
@@ -463,11 +462,10 @@ class UmamiClient:
         }
         if search:
             params["search"] = search
-        return await self._request("GET", "/websites", adapter=_WEBSITE_PAGE_ADAPTER, params=params)
+        return await self._request("/websites", adapter=_WEBSITE_PAGE_ADAPTER, params=params)
 
     async def get_stats(self, website_id: UUID, *, params: dict[str, Any]) -> WebsiteStats:
         return await self._request(
-            "GET",
             f"/websites/{website_id}/stats",
             adapter=_WEBSITE_STATS_ADAPTER,
             params=params,
@@ -475,7 +473,6 @@ class UmamiClient:
 
     async def get_pageviews(self, website_id: UUID, *, params: dict[str, Any]) -> Pageviews:
         return await self._request(
-            "GET",
             f"/websites/{website_id}/pageviews",
             adapter=_PAGEVIEWS_ADAPTER,
             params=params,
@@ -493,9 +490,9 @@ class UmamiClient:
             if expanded
             else f"/websites/{website_id}/metrics"
         )
-        return await self._request("GET", endpoint, adapter=_METRICS_ADAPTER, params=params)
+        return await self._request(endpoint, adapter=_METRICS_ADAPTER, params=params)
 
     async def get_active(self, website_id: UUID) -> ActiveVisitors:
         return await self._request(
-            "GET", f"/websites/{website_id}/active", adapter=_ACTIVE_VISITORS_ADAPTER
+            f"/websites/{website_id}/active", adapter=_ACTIVE_VISITORS_ADAPTER
         )

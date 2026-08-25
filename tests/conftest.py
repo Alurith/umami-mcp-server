@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
+from typing import Any, cast
 
+import httpx
 import pytest
 from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import Counter, Histogram, MeterProvider
@@ -12,7 +14,33 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from umami_mcp_server.settings import get_settings
+from umami_mcp_server.settings import Settings
+
+WEBSITES = {"data": [], "count": 0, "page": 1, "pageSize": 10}
+Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
+_ORIGINAL_ASYNC_CLIENT = httpx.AsyncClient
+
+
+def _settings(*, login: bool = False) -> Settings:
+    if login:
+        return Settings(
+            umami_username="synthetic-user",
+            umami_password="synthetic-password",
+            umami_api_base="https://self-hosted.example.invalid/api",
+        )
+    return Settings(
+        umami_api_key="synthetic-api-key",
+        umami_api_base="https://api.umami.is/v1",
+    )
+
+
+def _patch_async_client(monkeypatch: pytest.MonkeyPatch, handler: Handler) -> None:
+    transport = httpx.MockTransport(cast(Any, handler))
+
+    def factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        return _ORIGINAL_ASYNC_CLIENT(*args, **dict(kwargs), transport=transport)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
 
 
 @dataclass(frozen=True)
@@ -90,6 +118,4 @@ def _isolate_umami_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None
         "OTEL_METRICS_EXEMPLAR_FILTER",
     ):
         monkeypatch.delenv(name, raising=False)
-    get_settings.cache_clear()
     yield
-    get_settings.cache_clear()

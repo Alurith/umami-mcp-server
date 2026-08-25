@@ -153,18 +153,6 @@ def inject_trace_context(headers: MutableMapping[str, str]) -> None:
     _TRACE_CONTEXT_PROPAGATOR.inject(headers)  # type: ignore[arg-type]
 
 
-def set_response_status(span: Span, status_code: int) -> None:
-    span.set_attribute(HTTP_RESPONSE_STATUS_CODE, status_code)
-
-
-def set_retry_count(span: Span, count: int) -> None:
-    span.set_attribute(UMAMI_RETRY_COUNT, count)
-
-
-def set_outcome(span: Span, outcome: Outcome) -> None:
-    span.set_attribute(UMAMI_OUTCOME, outcome)
-
-
 def set_error(span: Span, error: BaseException) -> str:
     category = error_category(error)
     span.set_attribute(ERROR_TYPE, category)

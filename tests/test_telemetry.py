@@ -5,7 +5,6 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from uuid import UUID
 
@@ -16,15 +15,11 @@ from mcp_types import RequestParamsMeta
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import ReadableSpan
 
-from conftest import OtelCapture
+from conftest import OtelCapture, WEBSITES, _patch_async_client, _settings
 from umami_mcp_server import telemetry
 from umami_mcp_server.server import server
-from umami_mcp_server.settings import Settings, get_settings
 from umami_mcp_server.umami_client import UmamiClient, UmamiRateLimitError, UmamiUpstreamError
 
-WEBSITES = {"data": [], "count": 0, "page": 1, "pageSize": 10}
-Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
-_ORIGINAL_ASYNC_CLIENT = httpx.AsyncClient
 TRACE_ID = "1234567890abcdef1234567890abcdef"
 REMOTE_PARENT_ID = "1234567890abcdef"
 ALLOWED_ATTRIBUTES = {
@@ -37,28 +32,6 @@ ALLOWED_ATTRIBUTES = {
     telemetry.UMAMI_RETRY_CAUSE,
     telemetry.ERROR_TYPE,
 }
-
-
-def _settings(*, login: bool = False) -> Settings:
-    if login:
-        return Settings(
-            umami_username="synthetic-user",
-            umami_password="synthetic-password",
-            umami_api_base="https://self-hosted.example.invalid/api",
-        )
-    return Settings(
-        umami_api_key="synthetic-api-key",
-        umami_api_base="https://api.umami.is/v1",
-    )
-
-
-def _patch_async_client(monkeypatch: pytest.MonkeyPatch, handler: Handler) -> None:
-    transport = httpx.MockTransport(cast(Any, handler))
-
-    def factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
-        return _ORIGINAL_ASYNC_CLIENT(*args, **dict(kwargs), transport=transport)
-
-    monkeypatch.setattr(httpx, "AsyncClient", factory)
 
 
 def _application_spans(capture: OtelCapture) -> list[ReadableSpan]:
@@ -87,7 +60,6 @@ def _counter_total(metric: Any) -> int:
     return sum(point.value for point in metric.data.data_points)
 
 
-@pytest.mark.asyncio
 async def test_mcp_trace_context_is_parent_and_only_trace_context_reaches_umami(
     monkeypatch: pytest.MonkeyPatch,
     otel_capture: OtelCapture,
@@ -101,7 +73,6 @@ async def test_mcp_trace_context_is_parent_and_only_trace_context_reaches_umami(
 
     _patch_async_client(monkeypatch, handler)
     monkeypatch.setenv("UMAMI_API_KEY", "mcp-trace-api-key")
-    get_settings.cache_clear()
     meta = cast(
         RequestParamsMeta,
         {
@@ -146,7 +117,6 @@ async def test_mcp_trace_context_is_parent_and_only_trace_context_reaches_umami(
     assert outgoing_traceparent.split("-")[2] == f"{umami_span.context.span_id:016x}"
 
 
-@pytest.mark.asyncio
 async def test_success_on_first_send_has_zero_retries_and_records_duration(
     monkeypatch: pytest.MonkeyPatch,
     otel_capture: OtelCapture,
@@ -174,7 +144,6 @@ async def test_success_on_first_send_has_zero_retries_and_records_duration(
     assert point.sum >= 0
 
 
-@pytest.mark.asyncio
 async def test_retry_rate_limit_refresh_error_metrics_and_units(
     monkeypatch: pytest.MonkeyPatch,
     otel_capture: OtelCapture,
@@ -276,7 +245,6 @@ async def test_retry_rate_limit_refresh_error_metrics_and_units(
             assert set(point.attributes).issubset(ALLOWED_ATTRIBUTES)
 
 
-@pytest.mark.asyncio
 async def test_exhausted_rate_limits_count_every_response_and_one_logical_error(
     monkeypatch: pytest.MonkeyPatch,
     otel_capture: OtelCapture,
@@ -303,7 +271,6 @@ async def test_exhausted_rate_limits_count_every_response_and_one_logical_error(
     assert _counter_total(metrics[telemetry.REQUEST_ERRORS]) == 1
 
 
-@pytest.mark.asyncio
 async def test_concurrent_401_responses_count_one_real_token_refresh(
     monkeypatch: pytest.MonkeyPatch,
     otel_capture: OtelCapture,
@@ -338,7 +305,6 @@ async def test_concurrent_401_responses_count_one_real_token_refresh(
     assert _counter_total(metrics[telemetry.RETRIES]) == 2
 
 
-@pytest.mark.asyncio
 async def test_exported_telemetry_redacts_secrets_payloads_uuid_and_queries(
     monkeypatch: pytest.MonkeyPatch,
     otel_capture: OtelCapture,
@@ -382,7 +348,6 @@ async def test_exported_telemetry_redacts_secrets_payloads_uuid_and_queries(
         lambda _: httpx.Response(400, json={"detail": upstream_body}),
     )
     monkeypatch.setenv("UMAMI_API_KEY", mcp_api_key)
-    get_settings.cache_clear()
     async with Client(server) as mcp_client:
         result = await mcp_client.call_tool(
             "get_active",

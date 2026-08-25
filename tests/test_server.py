@@ -8,49 +8,15 @@ from uuid import UUID
 
 import pytest
 from mcp.client import Client
+from pydantic import TypeAdapter
 
-from umami_mcp_server.models import (
-    ActiveVisitors,
-    ExpandedMetric,
-    Metric,
-    Pageviews,
-    StatsValues,
-    WebsitePage,
-    WebsiteStats,
-)
+from umami_mcp_server.models import ActiveVisitors, MetricType, WebsitePage
 from umami_mcp_server.server import SERVER_VERSION, server
 from umami_mcp_server.umami_client import UmamiUpstreamError
 
 server_module = importlib.import_module("umami_mcp_server.server")
 WEBSITE_ID = "11111111-1111-4111-8111-111111111111"
-METRIC_TYPES = [
-    "path",
-    "fullPath",
-    "entry",
-    "exit",
-    "referrer",
-    "domain",
-    "title",
-    "query",
-    "event",
-    "tag",
-    "hostname",
-    "utmSource",
-    "utmMedium",
-    "utmCampaign",
-    "utmContent",
-    "utmTerm",
-    "browser",
-    "os",
-    "device",
-    "screen",
-    "language",
-    "country",
-    "city",
-    "region",
-    "distinctId",
-    "channel",
-]
+METRIC_TYPES = TypeAdapter(MetricType).json_schema()["enum"]
 
 
 class FakeUmamiClient:
@@ -71,38 +37,6 @@ class FakeUmamiClient:
             {"data": [], "count": 0, "page": 1, "pageSize": 10, "fakeExtra": True}
         )
 
-    async def get_stats(self, website_id: UUID, *, params: dict[str, Any]) -> WebsiteStats:
-        self.calls.append(("get_stats", (website_id, params)))
-        values = dict(pageviews=10, visitors=5, visits=6, bounces=2, totaltime=100)
-        return WebsiteStats.model_validate(
-            {**values, "comparison": StatsValues(**values), "fakeExtra": True}
-        )
-
-    async def get_pageviews(self, website_id: UUID, *, params: dict[str, Any]) -> Pageviews:
-        self.calls.append(("get_pageviews", (website_id, params)))
-        return Pageviews.model_validate({"pageviews": [], "sessions": [], "fakeExtra": True})
-
-    async def get_metrics(
-        self,
-        website_id: UUID,
-        *,
-        expanded: bool,
-        params: dict[str, Any],
-    ) -> list[Metric | ExpandedMetric]:
-        self.calls.append(("get_metrics", (website_id, expanded, params)))
-        if expanded:
-            return [
-                ExpandedMetric(
-                    name="Chrome",
-                    pageviews=10,
-                    visitors=5,
-                    visits=6,
-                    bounces=2,
-                    totaltime=100,
-                )
-            ]
-        return [Metric(x="Chrome", y=5)]
-
     async def get_active(self, website_id: UUID) -> ActiveVisitors:
         self.calls.append(("get_active", website_id))
         if self.fail_active:
@@ -114,12 +48,11 @@ class FakeUmamiClient:
 def fake_lifespan(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[FakeUmamiClient]]:
     FakeUmamiClient.instances = []
     FakeUmamiClient.fail_active = False
-    monkeypatch.setattr(server_module, "get_settings", lambda: object())
+    monkeypatch.setattr(server_module, "Settings", lambda: object())
     monkeypatch.setattr(server_module, "UmamiClient", FakeUmamiClient)
     yield FakeUmamiClient
 
 
-@pytest.mark.asyncio
 async def test_server_negotiates_current_protocol(fake_lifespan: type[FakeUmamiClient]) -> None:
     async with Client(server, raise_exceptions=True) as client:
         assert client.protocol_version == "2026-07-28"
@@ -129,7 +62,6 @@ async def test_server_negotiates_current_protocol(fake_lifespan: type[FakeUmamiC
         assert client.server_info.version == SERVER_VERSION
 
 
-@pytest.mark.asyncio
 async def test_server_capabilities_match_the_standard_mcpserver_surface(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -148,7 +80,6 @@ async def test_server_capabilities_match_the_standard_mcpserver_surface(
     assert "experimental" not in capabilities
 
 
-@pytest.mark.asyncio
 async def test_server_lists_tools_in_deterministic_order(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -169,7 +100,6 @@ async def test_server_lists_tools_in_deterministic_order(
     )
 
 
-@pytest.mark.asyncio
 async def test_tools_catalog_has_a_public_five_minute_cache_hint(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -180,7 +110,6 @@ async def test_tools_catalog_has_a_public_five_minute_cache_hint(
     assert result.cache_scope == "public"
 
 
-@pytest.mark.asyncio
 async def test_server_exposes_strong_input_and_output_schemas(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -224,7 +153,6 @@ async def test_server_exposes_strong_input_and_output_schemas(
     assert metrics_output["$defs"]["Metric"]["additionalProperties"] is True
 
 
-@pytest.mark.asyncio
 async def test_one_client_is_reused_across_tools_and_closed_once(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -239,7 +167,6 @@ async def test_one_client_is_reused_across_tools_and_closed_once(
     assert instance.close_calls == 1
 
 
-@pytest.mark.asyncio
 async def test_lifespan_closes_client_after_tool_exception(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -252,7 +179,6 @@ async def test_lifespan_closes_client_after_tool_exception(
     assert fake_lifespan.instances[0].close_calls == 1
 
 
-@pytest.mark.asyncio
 async def test_concurrent_tool_calls_share_the_client(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -267,7 +193,6 @@ async def test_concurrent_tool_calls_share_the_client(
     assert fake_lifespan.instances[0].close_calls == 1
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tool", "arguments"),
     [
@@ -291,7 +216,6 @@ async def test_invalid_inputs_are_rejected_before_http(
         assert fake_lifespan.instances[0].calls == []
 
 
-@pytest.mark.asyncio
 async def test_upstream_error_is_a_sanitized_tool_error(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:
@@ -305,7 +229,6 @@ async def test_upstream_error_is_a_sanitized_tool_error(
     assert "Traceback" not in text
 
 
-@pytest.mark.asyncio
 async def test_server_keeps_legacy_client_compatibility(
     fake_lifespan: type[FakeUmamiClient],
 ) -> None:

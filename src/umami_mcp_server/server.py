@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Annotated, Any
@@ -33,7 +32,7 @@ from .models import (
     WebsiteStats,
     ms_timerange,
 )
-from .settings import get_settings
+from .settings import Settings
 from .umami_client import UmamiClient
 
 try:
@@ -42,16 +41,11 @@ except PackageNotFoundError:
     SERVER_VERSION = "0.0.0"
 
 
-@dataclass(frozen=True, slots=True)
-class AppContext:
-    umami_client: UmamiClient
-
-
 @asynccontextmanager
-async def _lifespan(_server: MCPServer[AppContext]) -> AsyncIterator[AppContext]:
-    client = UmamiClient(get_settings())
+async def _lifespan(_server: MCPServer[UmamiClient]) -> AsyncIterator[UmamiClient]:
+    client = UmamiClient(Settings())
     try:
-        yield AppContext(umami_client=client)
+        yield client
     finally:
         await client.aclose()
 
@@ -89,7 +83,7 @@ async def _sanitize_validation_errors(
     return {**result, "content": [item.model_dump(by_alias=True) for item in safe_content]}
 
 
-server = MCPServer[AppContext](
+server = MCPServer[UmamiClient](
     "umami-mcp-server",
     title="Umami MCP",
     version=SERVER_VERSION,
@@ -117,8 +111,8 @@ def _timerange_to_params(start_at: datetime | None, end_at: datetime | None) -> 
     return {"startAt": start_ms, "endAt": end_ms}
 
 
-def _client(ctx: Context[AppContext]) -> UmamiClient:
-    return ctx.request_context.lifespan_context.umami_client
+def _client(ctx: Context[UmamiClient]) -> UmamiClient:
+    return ctx.request_context.lifespan_context
 
 
 StartAt = Annotated[
@@ -147,7 +141,7 @@ ToolFilters = Annotated[
 
 @server.tool()
 async def get_websites(
-    ctx: Context[AppContext],
+    ctx: Context[UmamiClient],
     include_teams: Annotated[
         bool,
         Field(description="Include websites owned through teams."),
@@ -171,7 +165,7 @@ async def get_websites(
 
 @server.tool()
 async def get_stats(
-    ctx: Context[AppContext],
+    ctx: Context[UmamiClient],
     website_id: WebsiteId,
     start_at: StartAt = None,
     end_at: EndAt = None,
@@ -191,7 +185,7 @@ async def get_stats(
 
 @server.tool()
 async def get_pageviews(
-    ctx: Context[AppContext],
+    ctx: Context[UmamiClient],
     website_id: WebsiteId,
     start_at: StartAt = None,
     end_at: EndAt = None,
@@ -217,7 +211,7 @@ async def get_pageviews(
 
 @server.tool()
 async def get_metrics(
-    ctx: Context[AppContext],
+    ctx: Context[UmamiClient],
     website_id: WebsiteId,
     type: MetricType,
     start_at: StartAt = None,
@@ -244,7 +238,7 @@ async def get_metrics(
 
 
 @server.tool()
-async def get_active(ctx: Context[AppContext], website_id: WebsiteId) -> ActiveVisitors:
+async def get_active(ctx: Context[UmamiClient], website_id: WebsiteId) -> ActiveVisitors:
     """Return the number of visitors active during Umami's current active window."""
 
     return await _client(ctx).get_active(website_id)

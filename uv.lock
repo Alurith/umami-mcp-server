@@ -1151,7 +1151,6 @@ dependencies = [
 otel = [
     { name = "opentelemetry-distro" },
     { name = "opentelemetry-exporter-otlp" },
-    { name = "opentelemetry-sdk" },
 ]
 
 [package.dev-dependencies]
@@ -1170,7 +1169,6 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.44.0,<2" },
     { name = "opentelemetry-distro", marker = "extra == 'otel'", specifier = ">=0.65b0,<1" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'otel'", specifier = ">=1.44.0,<2" },
-    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.44.0,<2" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "tzdata", specifier = ">=2025.2" },

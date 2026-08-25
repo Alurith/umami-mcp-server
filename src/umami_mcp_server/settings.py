@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
@@ -82,8 +81,3 @@ class Settings(BaseSettings):
             )
 
         return self
-
-
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()

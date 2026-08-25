@@ -23,7 +23,6 @@ pytestmark = [
 ]
 
 
-@pytest.mark.asyncio
 async def test_live_cloud_read_only_contract() -> None:
     assert _API_KEY is not None
     assert _WEBSITE_ID is not None

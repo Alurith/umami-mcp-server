@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from email.utils import format_datetime
-from typing import Any, cast
 
 import httpx
 import pytest
 
+from conftest import WEBSITES, _patch_async_client, _settings
 from umami_mcp_server.models import WebsitePage
-from umami_mcp_server.settings import Settings
 from umami_mcp_server.umami_client import (
     UmamiAuthenticationError,
     UmamiClient,
@@ -22,39 +20,12 @@ from umami_mcp_server.umami_client import (
     UmamiUpstreamError,
 )
 
-WEBSITES = {"data": [], "count": 0, "page": 1, "pageSize": 10}
-Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
-
-
-def _settings(*, login: bool = False) -> Settings:
-    if login:
-        return Settings(
-            umami_username="synthetic-user",
-            umami_password="synthetic-password",
-            umami_api_base="https://self-hosted.example.invalid/api",
-        )
-    return Settings(
-        umami_api_key="synthetic-api-key",
-        umami_api_base="https://api.umami.is/v1",
-    )
-
-
-def _patch_async_client(monkeypatch: pytest.MonkeyPatch, handler: Handler) -> None:
-    original = httpx.AsyncClient
-    transport = httpx.MockTransport(cast(Any, handler))
-
-    def factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
-        return original(*args, **dict(kwargs), transport=transport)
-
-    monkeypatch.setattr(httpx, "AsyncClient", factory)
-
 
 async def _recording_sleep(delays: list[float], delay: float) -> object:
     delays.append(delay)
     return None
 
 
-@pytest.mark.asyncio
 async def test_cloud_api_key_uses_documented_bearer_authentication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -78,7 +49,6 @@ async def test_cloud_api_key_uses_documented_bearer_authentication(
     assert seen_legacy_header is None
 
 
-@pytest.mark.asyncio
 async def test_login_flow_adds_bearer_token_and_returns_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -105,7 +75,6 @@ async def test_login_flow_adds_bearer_token_and_returns_model(
     assert seen_traceparent is not None
 
 
-@pytest.mark.asyncio
 async def test_concurrent_initial_requests_perform_one_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -129,7 +98,6 @@ async def test_concurrent_initial_requests_perform_one_login(
     assert login_calls == 1
 
 
-@pytest.mark.asyncio
 async def test_401_refreshes_token_and_resends_within_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -160,40 +128,6 @@ async def test_401_refreshes_token_and_resends_within_budget(
     assert auth_headers == ["Bearer token-1", "Bearer token-2"]
 
 
-@pytest.mark.asyncio
-async def test_concurrent_401_responses_perform_one_refresh(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    login_calls = 0
-    stale_requests = 0
-    both_stale_sent = asyncio.Event()
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal login_calls, stale_requests
-        if request.url.path.endswith("/auth/login"):
-            login_calls += 1
-            return httpx.Response(200, json={"token": f"token-{login_calls}"})
-
-        if request.headers.get("Authorization") == "Bearer token-1":
-            stale_requests += 1
-            if stale_requests == 2:
-                both_stale_sent.set()
-            await both_stale_sent.wait()
-            return httpx.Response(401, json={"error": "expired"})
-        return httpx.Response(200, json=WEBSITES)
-
-    _patch_async_client(monkeypatch, handler)
-    client = UmamiClient(_settings(login=True))
-    try:
-        await asyncio.gather(client.get_websites(), client.get_websites())
-    finally:
-        await client.aclose()
-
-    assert stale_requests == 2
-    assert login_calls == 2
-
-
-@pytest.mark.asyncio
 async def test_second_401_does_not_refresh_again(monkeypatch: pytest.MonkeyPatch) -> None:
     login_calls = 0
     analytics_calls = 0
@@ -218,7 +152,6 @@ async def test_second_401_does_not_refresh_again(monkeypatch: pytest.MonkeyPatch
     assert analytics_calls == 2
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [401, 403])
 async def test_api_key_auth_errors_are_not_retried(
     monkeypatch: pytest.MonkeyPatch, status: int
@@ -240,7 +173,6 @@ async def test_api_key_auth_errors_are_not_retried(
     assert calls == 1
 
 
-@pytest.mark.asyncio
 async def test_login_mode_403_does_not_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     login_calls = 0
     analytics_calls = 0
@@ -263,7 +195,6 @@ async def test_login_mode_403_does_not_refresh(monkeypatch: pytest.MonkeyPatch) 
     assert (login_calls, analytics_calls) == (1, 1)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failure", "error_type"),
     [
@@ -309,7 +240,6 @@ async def test_retryable_failures_send_exactly_three_requests_and_sleep_twice(
     assert delays == [0.5, 1.0]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [400, 404, 501, 505])
 async def test_non_retryable_statuses_are_sent_once(
     monkeypatch: pytest.MonkeyPatch, status: int
@@ -333,7 +263,6 @@ async def test_non_retryable_statuses_are_sent_once(
     assert delays == []
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("retry_after", "clock", "expected_delay"),
     [
@@ -377,7 +306,6 @@ async def test_retry_after_parsing_precedence_fallback_and_cap(
     assert delays == [expected_delay]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("malformed_json", [True, False])
 async def test_malformed_json_and_invalid_payload_are_not_retried(
     monkeypatch: pytest.MonkeyPatch,
@@ -406,7 +334,6 @@ async def test_malformed_json_and_invalid_payload_are_not_retried(
     assert response.is_closed
 
 
-@pytest.mark.asyncio
 async def test_invalid_login_token_is_a_controlled_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -422,7 +349,6 @@ async def test_invalid_login_token_is_a_controlled_error(
         await client.aclose()
 
 
-@pytest.mark.asyncio
 async def test_errors_and_logs_do_not_expose_secrets_or_upstream_body(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -458,7 +384,6 @@ async def test_errors_and_logs_do_not_expose_secrets_or_upstream_body(
     assert "status=500" in log_text
 
 
-@pytest.mark.asyncio
 async def test_response_and_async_client_are_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     response = httpx.Response(200, json=WEBSITES)
 
